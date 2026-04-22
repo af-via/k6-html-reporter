@@ -1,6 +1,6 @@
 {
   "name": "@zenturing/k6-html-reporter",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "A modern HTML reporter for k6 performance tests",
   "main": "k6-html-reporter.js",
   "types": "k6-html-reporter.d.ts",

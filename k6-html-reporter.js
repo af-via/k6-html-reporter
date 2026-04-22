@@ -28,6 +28,9 @@ export function htmlReport(data, options = {}) {
     const subtitle = options.subtitle || '';
     const httpMethod = options.httpMethod || '';
     const additionalInfo = options.additionalInfo || {};
+    const customSections = options.customSections || [];
+    const consoleErrorLog = options.consoleErrorLog || [];
+    const configuredThresholds = options.configuredThresholds || {};
     const debug = options.debug || false;
 
     console.log("[k6-html-reporter] Generating HTML summary report");
@@ -41,7 +44,7 @@ export function htmlReport(data, options = {}) {
     const stats = calculateStats(data);
     
     // Generate and return the complete HTML report
-    return generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, stats);
+    return generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, customSections, stats, consoleErrorLog, configuredThresholds);
 }
 
 /**
@@ -52,10 +55,11 @@ export function htmlReport(data, options = {}) {
  * @param {string} subtitle - Report subtitle/endpoint
  * @param {string} httpMethod - HTTP method for the API call
  * @param {Object} additionalInfo - Additional test configuration info
+ * @param {Array} customSections - Custom tab sections [{id, title, icon, content}]
  * @param {Object} stats - Pre-calculated statistics
  * @returns {string} Complete HTML document
  */
-function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, stats) {
+function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, customSections, stats, consoleErrorLog, configuredThresholds) {
     // Determine overall test status (pass/fail) based on errors, check failures, and threshold failures
     const testStatus = stats.failedRequests === 0 && stats.checkFailures === 0 && stats.thresholdFailures === 0;
     
@@ -90,10 +94,9 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, s
             min-height: 100vh;
         }
 
-        /* Main container with white background and shadow */
+        /* Main container — full width with side padding */
         .container {
-            max-width: 1400px;
-            margin: 0 auto;
+            margin: 0 24px;
             background: white;
             border-radius: 20px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
@@ -272,29 +275,31 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, s
             padding: 40px;
         }
 
-        /* Tab button container with bottom border */
+        /* Tab button container with bottom border — single row */
         .tabs {
             display: flex;
-            gap: 10px;
+            gap: 4px;
             border-bottom: 2px solid #e9ecef;
             margin-bottom: 30px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            overflow-x: auto;
         }
 
-        /* Individual tab button styling */
+        /* Individual tab button styling — compact to fit one row */
         .tab-button {
-            padding: 15px 30px;
+            padding: 12px 18px;
             background: none;
             border: none;
             cursor: pointer;
-            font-size: 1em;
+            font-size: 0.9em;
             font-weight: 600;
             color: #6c757d;
             border-bottom: 3px solid transparent;
             transition: all 0.3s ease;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
+            white-space: nowrap;
         }
 
         /* Tab button hover state */
@@ -756,6 +761,12 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, s
                 <button class="tab-button" onclick="switchTab(event, 'thresholds')">
                     <i class="fas fa-gauge-high"></i> Thresholds
                 </button>
+                <!-- Custom section tabs -->
+                ${customSections.map(s => `
+                <button class="tab-button" onclick="switchTab(event, '${s.id}')">
+                    ${s.icon ? `<i class="fas fa-${s.icon}"></i>` : ''} ${escapeHtml(s.title)}
+                </button>
+                `).join('')}
                 <!-- Conditional Test Info tab (only if additional info provided) -->
                 ${Object.keys(additionalInfo).length > 0 ? `
                 <button class="tab-button" onclick="switchTab(event, 'testinfo')">
@@ -783,8 +794,15 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, s
 
             <!-- Thresholds Tab - Threshold pass/fail status -->
             <div id="thresholds" class="tab-content">
-                ${generateThresholdsSection(data)}
+                ${generateThresholdsSection(data, consoleErrorLog, configuredThresholds)}
             </div>
+
+            <!-- Custom section content panels -->
+            ${customSections.map(s => `
+            <div id="${s.id}" class="tab-content">
+                ${s.content}
+            </div>
+            `).join('')}
 
             <!-- Test Info Tab - Additional configuration details -->
             ${Object.keys(additionalInfo).length > 0 ? `
@@ -798,7 +816,6 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, s
              FOOTER
              ======================================== -->
         <div class="footer">
-            <p><strong>K6 HTML Reporter</strong></p>
             <p>Generated by K6 Performance Testing Suite</p>
         </div>
     </div>
@@ -1093,45 +1110,142 @@ function generateChecksSection(data) {
 }
 
 /**
- * Generate the thresholds section HTML
- * Displays pass/fail status for all configured thresholds
- * 
- * @param {Object} data - The k6 test results data
- * @returns {string} HTML string for the thresholds section
+ * Evaluate a threshold rule against a metric's values.
+ * Supports: p(N)<V, avg<V, min<V, max<V, med<V, count<V, rate<V
+ * Returns true if passed, false if failed, null if can't evaluate.
  */
-function generateThresholdsSection(data) {
+function evaluateThreshold(rule, metric) {
+    if (!metric || !metric.values) return null;
+    const match = rule.match(/^(\w+(?:\(\d+\))?)\s*([<>!=]+)\s*([\d.]+)$/);
+    if (!match) return null;
+    const [, stat, op, valStr] = match;
+    const threshold = parseFloat(valStr);
+    const actual = metric.values[stat];
+    if (actual === undefined || actual === null) return null;
+    switch (op) {
+        case '<': return actual < threshold;
+        case '<=': return actual <= threshold;
+        case '>': return actual > threshold;
+        case '>=': return actual >= threshold;
+        case '==': return actual === threshold;
+        case '!=': return actual !== threshold;
+        default: return null;
+    }
+}
+
+/**
+ * Build HTML for a single threshold item.
+ */
+function buildThresholdItem(metricName, thresholdName, isPassed, metric, consoleErrorLog, timeoutEntries, errorEntries) {
+    // isPassed can be true, false, or null (no data)
+    const color = isPassed === null ? '#6c757d' : isPassed ? '#28a745' : '#dc3545';
+    const icon = isPassed === null ? 'question-circle' : isPassed ? 'check-circle' : 'times-circle';
+    const badgeClass = isPassed === null ? 'badge-warning' : isPassed ? 'badge-success' : 'badge-error';
+    const label = isPassed === null ? 'NO DATA' : isPassed ? 'PASSED' : 'FAILED';
+
+    const isConsoleErrors = metricName === 'wf_console_errors';
+    const isConsoleTimeouts = metricName === 'wf_console_timeouts';
+    const entries = isConsoleErrors ? errorEntries : isConsoleTimeouts ? timeoutEntries : [];
+    const hasEntries = entries.length > 0;
+
+    // Show actual metric value next to threshold rule
+    let actualValue = '';
+    if (metric && metric.values) {
+        const match = thresholdName.match(/^(\w+(?:\(\d+\))?)/);
+        if (match) {
+            const stat = match[1];
+            const val = metric.values[stat];
+            if (val !== undefined && val !== null) {
+                actualValue = ` (actual: ${typeof val === 'number' ? val.toFixed(2) : val})`;
+            }
+        }
+    }
+
+    let html = `<div class="check-item" style="border-left: 4px solid ${color}; flex-direction: column; align-items: stretch;">`;
+    html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
+    html += `<div style="flex: 1;">`;
+    html += `<div style="font-weight: 600; margin-bottom: 5px;">`;
+    html += `<i class="fas fa-${icon}" style="color: ${color};"></i> ${escapeHtml(metricName)}`;
+    html += `</div>`;
+    html += `<div style="color: #6c757d; font-size: 0.9em; font-family: monospace;">${escapeHtml(thresholdName)}${actualValue}</div>`;
+    html += `</div>`;
+    html += `<div class="check-stats"><span class="badge ${badgeClass}"><i class="fas fa-${isPassed === null ? 'question' : isPassed ? 'check' : 'times'}"></i> ${label}</span></div>`;
+    html += `</div>`;
+
+    // Expandable console errors/timeouts
+    if (hasEntries) {
+        html += `<details style="margin-top: 10px;">`;
+        html += `<summary style="cursor: pointer; color: #667eea; font-weight: 500; font-size: 0.9em; user-select: none;">`;
+        html += `<i class="fas fa-list"></i> View ${entries.length} captured ${isConsoleTimeouts ? 'timeout' : 'error'} message${entries.length !== 1 ? 's' : ''}`;
+        html += `</summary>`;
+        html += `<div style="margin-top: 8px; max-height: 400px; overflow-y: auto; background: #f8f9fa; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 0.8em; line-height: 1.8;">`;
+        for (let i = 0; i < entries.length; i++) {
+            const entryText = isConsoleTimeouts ? entries[i].replace(/^TIMEOUT:\s*/, '') : entries[i];
+            const bgColor = i % 2 === 0 ? '#fff' : '#f1f3f5';
+            html += `<div style="padding: 6px 10px; background: ${bgColor}; border-radius: 4px; margin-bottom: 2px; word-break: break-all;">`;
+            html += `<span style="color: #999; margin-right: 8px;">${i + 1}.</span>${escapeHtml(entryText)}`;
+            html += `</div>`;
+        }
+        html += `</div></details>`;
+    } else if (isConsoleErrors || isConsoleTimeouts) {
+        const count = metric && metric.values ? (metric.values.count || 0) : 0;
+        if (count > 0) {
+            html += `<div style="margin-top: 8px; color: #999; font-size: 0.85em; font-style: italic;">`;
+            html += `<i class="fas fa-info-circle"></i> ${count} ${isConsoleTimeouts ? 'timeout' : 'error'}(s) counted — log entries not available`;
+            html += `</div>`;
+        }
+    }
+
+    html += `</div>`;
+    return html;
+}
+
+/**
+ * Generate the thresholds section HTML
+ * Displays pass/fail status for all configured thresholds.
+ * Uses k6's built-in evaluation when available, falls back to self-evaluation.
+ */
+function generateThresholdsSection(data, consoleErrorLog, configuredThresholds) {
     let passedCount = 0;
     let failedCount = 0;
     let thresholdItems = '';
 
-    // Iterate through all metrics to find thresholds
+    // Separate console errors and timeouts from the log
+    const timeoutEntries = (consoleErrorLog || []).filter(e => e.startsWith("TIMEOUT:"));
+    const errorEntries = (consoleErrorLog || []).filter(e => !e.startsWith("TIMEOUT:"));
+
+    // First: try to use k6's built-in threshold evaluation (attached to metrics)
+    let hasK6Thresholds = false;
     for (const metricName in data.metrics) {
-        const metric = data.metrics[metricName];
-        
-        if (metric.thresholds) {
+        if (data.metrics[metricName].thresholds) {
+            hasK6Thresholds = true;
+            break;
+        }
+    }
+
+    if (hasK6Thresholds) {
+        // Use k6's threshold evaluation
+        for (const metricName in data.metrics) {
+            const metric = data.metrics[metricName];
+            if (!metric.thresholds) continue;
             for (const thresholdName in metric.thresholds) {
                 const isPassed = metric.thresholds[thresholdName].ok;
-                
-                if (isPassed) {
-                    passedCount++;
-                } else {
-                    failedCount++;
-                }
-
-                const color = isPassed ? '#28a745' : '#dc3545';
-                const icon = isPassed ? 'check-circle' : 'times-circle';
-                const badgeClass = isPassed ? 'badge-success' : 'badge-error';
-                const label = isPassed ? 'PASSED' : 'FAILED';
-
-                thresholdItems += `<div class="check-item" style="border-left: 4px solid ${color};">`;
-                thresholdItems += `<div style="flex: 1;">`;
-                thresholdItems += `<div style="font-weight: 600; margin-bottom: 5px;">`;
-                thresholdItems += `<i class="fas fa-${icon}" style="color: ${color};"></i> ${escapeHtml(metricName)}`;
-                thresholdItems += `</div>`;
-                thresholdItems += `<div style="color: #6c757d; font-size: 0.9em; font-family: monospace;">${escapeHtml(thresholdName)}</div>`;
-                thresholdItems += `</div>`;
-                thresholdItems += `<div class="check-stats"><span class="badge ${badgeClass}"><i class="fas fa-${isPassed ? 'check' : 'times'}"></i> ${label}</span></div>`;
-                thresholdItems += `</div>`;
+                if (isPassed) passedCount++; else failedCount++;
+                thresholdItems += buildThresholdItem(metricName, thresholdName, isPassed, metric, consoleErrorLog, timeoutEntries, errorEntries);
+            }
+        }
+    } else if (configuredThresholds && Object.keys(configuredThresholds).length > 0) {
+        // Fallback: self-evaluate thresholds from config against metric values
+        for (const metricName in configuredThresholds) {
+            const rules = configuredThresholds[metricName]; // e.g. ["p(95)<3000"]
+            const metric = data.metrics ? data.metrics[metricName] : null;
+            if (!Array.isArray(rules)) continue;
+            for (const rule of rules) {
+                const isPassed = metric ? evaluateThreshold(rule, metric) : null;
+                if (isPassed === true) passedCount++;
+                else if (isPassed === false) failedCount++;
+                // null = metric not present (no data)
+                thresholdItems += buildThresholdItem(metricName, rule, isPassed, metric, consoleErrorLog, timeoutEntries, errorEntries);
             }
         }
     }
