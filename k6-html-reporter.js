@@ -31,6 +31,7 @@ export function htmlReport(data, options = {}) {
     const customSections = options.customSections || [];
     const consoleErrorLog = options.consoleErrorLog || [];
     const configuredThresholds = options.configuredThresholds || {};
+    const metricNameMap = options.metricNameMap || {};
     const debug = options.debug || false;
 
     console.log("[k6-html-reporter] Generating HTML summary report");
@@ -44,7 +45,7 @@ export function htmlReport(data, options = {}) {
     const stats = calculateStats(data);
     
     // Generate and return the complete HTML report
-    return generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, customSections, stats, consoleErrorLog, configuredThresholds);
+    return generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, customSections, stats, consoleErrorLog, configuredThresholds, metricNameMap);
 }
 
 /**
@@ -59,7 +60,7 @@ export function htmlReport(data, options = {}) {
  * @param {Object} stats - Pre-calculated statistics
  * @returns {string} Complete HTML document
  */
-function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, customSections, stats, consoleErrorLog, configuredThresholds) {
+function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, customSections, stats, consoleErrorLog, configuredThresholds, metricNameMap) {
     // Determine overall test status (pass/fail) based on errors, check failures, and threshold failures
     const testStatus = stats.failedRequests === 0 && stats.checkFailures === 0 && stats.thresholdFailures === 0;
     
@@ -213,6 +214,11 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
         .stat-card:hover {
             transform: translateY(-5px);
             box-shadow: 0 15px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        /* Clickable stat cards that navigate to tabs */
+        .stat-card[data-tab] {
+            cursor: pointer;
         }
 
         /* Success state: green gradient */
@@ -672,7 +678,7 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
                 <!-- Subtitle with HTTP method badge if provided -->
                 ${subtitle ? `
                 <div class="header-subtitle">
-                    ${httpMethod ? `<span class="http-method-badge method-${httpMethod}">${httpMethod}</span>` : '<i class="fas fa-link"></i>'}
+                    ${httpMethod ? `<span class="http-method-badge method-${httpMethod}">${httpMethod}</span>` : ''}
                     ${escapeHtml(subtitle)}
                 </div>
                 <span class="test-status" style="margin-top: 15px;">
@@ -695,7 +701,7 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
              ======================================== -->
         <div class="stats-grid">
             <!-- Total Requests Card -->
-            <div class="stat-card ${stats.failedRequests === 0 ? 'success' : 'error'}">
+            <div class="stat-card ${stats.failedRequests === 0 ? 'success' : 'error'}" data-tab="metrics">
                 <i class="fas fa-globe stat-icon"></i>
                 <div class="stat-label">Total Requests</div>
                 <div class="stat-value">${stats.totalRequests.toLocaleString()}</div>
@@ -703,7 +709,7 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
             </div>
 
             <!-- Success Rate Card -->
-            <div class="stat-card ${stats.errorRate > 0 ? 'error' : 'success'}">
+            <div class="stat-card ${stats.errorRate > 0 ? 'error' : 'success'}" data-tab="metrics">
                 <i class="fas fa-chart-line stat-icon"></i>
                 <div class="stat-label">Success Rate</div>
                 <div class="stat-value">${stats.successRate}%</div>
@@ -711,15 +717,15 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
             </div>
 
             <!-- Average Response Time Card -->
-            <div class="stat-card ${parseFloat(stats.avgResponseTime) > 1000 ? 'warning' : 'success'}">
+            <div class="stat-card ${parseFloat(stats.avgResponseTime) > 1000 ? 'warning' : 'success'}" data-tab="metrics">
                 <i class="fas fa-tachometer-alt stat-icon"></i>
                 <div class="stat-label">Avg Response Time</div>
-                <div class="stat-value">${stats.avgResponseTime}<span style="font-size: 0.5em;">ms</span></div>
-                <div class="stat-subtext">P95: ${stats.p95ResponseTime}ms</div>
+                <div class="stat-value">${fmtDuration(parseFloat(stats.avgResponseTime))}</div>
+                <div class="stat-subtext">P95: ${fmtDuration(parseFloat(stats.p95ResponseTime))}</div>
             </div>
 
             <!-- Virtual Users Card -->
-            <div class="stat-card">
+            <div class="stat-card" data-tab="overview">
                 <i class="fas fa-users stat-icon"></i>
                 <div class="stat-label">Virtual Users</div>
                 <div class="stat-value">${stats.maxVUs}</div>
@@ -727,7 +733,7 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
             </div>
 
             <!-- Checks Card -->
-            <div class="stat-card ${stats.checkFailures > 0 ? 'error' : 'success'}">
+            <div class="stat-card ${stats.checkFailures > 0 ? 'error' : 'success'}" data-tab="checks">
                 <i class="fas fa-check-circle stat-icon"></i>
                 <div class="stat-label">Checks</div>
                 <div class="stat-value">${stats.totalChecks}</div>
@@ -735,7 +741,7 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
             </div>
 
             <!-- Thresholds Card -->
-            <div class="stat-card ${stats.thresholdFailures > 0 ? 'error' : 'success'}">
+            <div class="stat-card ${stats.thresholdFailures > 0 ? 'error' : 'success'}" data-tab="thresholds">
                 <i class="fas fa-exclamation-triangle stat-icon"></i>
                 <div class="stat-label">Thresholds</div>
                 <div class="stat-value">${stats.thresholdFailures}</div>
@@ -794,7 +800,7 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
 
             <!-- Thresholds Tab - Threshold pass/fail status -->
             <div id="thresholds" class="tab-content">
-                ${generateThresholdsSection(data, consoleErrorLog, configuredThresholds)}
+                ${generateThresholdsSection(data, consoleErrorLog, configuredThresholds, metricNameMap)}
             </div>
 
             <!-- Custom section content panels -->
@@ -836,7 +842,16 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
             document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
             
             // Add active class to clicked button
-            event.currentTarget.classList.add('active');
+            if (event && event.currentTarget) {
+                event.currentTarget.classList.add('active');
+            } else {
+                // Programmatic call — find the matching tab button
+                document.querySelectorAll('.tab-button').forEach(btn => {
+                    if (btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(tabId)) {
+                        btn.classList.add('active');
+                    }
+                });
+            }
             // Show selected tab content
             document.getElementById(tabId).classList.add('active');
         }
@@ -850,6 +865,15 @@ function generateModernHTML(data, title, subtitle, httpMethod, additionalInfo, c
                 const width = bar.style.width; // Store final width
                 bar.style.width = '0';         // Start at 0
                 setTimeout(() => { bar.style.width = width; }, 100); // Animate to final width
+            });
+
+            // Make stat cards clickable — navigate to the linked tab
+            document.querySelectorAll('.stat-card[data-tab]').forEach(card => {
+                card.addEventListener('click', () => {
+                    const tabId = card.getAttribute('data-tab');
+                    switchTab(null, tabId);
+                    document.querySelector('.tabs-container').scrollIntoView({ behavior: 'smooth' });
+                });
             });
         });
     </script>
@@ -1029,18 +1053,17 @@ function generateMetricsTable(data) {
             
             html += '<tr>';
             html += `<td><strong>${metricName}</strong></td>`;
-            html += `<td>${(values.avg || 0).toFixed(2)}</td>`;
-            html += `<td class="metric-value-good">${(values.min || 0).toFixed(2)}</td>`;
-            html += `<td>${(values.med || 0).toFixed(2)}</td>`;
-            html += `<td class="metric-value-bad">${(values.max || 0).toFixed(2)}</td>`;
-            html += `<td>${(values['p(90)'] || 0).toFixed(2)}</td>`;
-            html += `<td>${(values['p(95)'] || 0).toFixed(2)}</td>`;
+            html += `<td>${fmtDuration(values.avg || 0)}</td>`;
+            html += `<td class="metric-value-good">${fmtDuration(values.min || 0)}</td>`;
+            html += `<td>${fmtDuration(values.med || 0)}</td>`;
+            html += `<td class="metric-value-bad">${fmtDuration(values.max || 0)}</td>`;
+            html += `<td>${fmtDuration(values['p(90)'] || 0)}</td>`;
+            html += `<td>${fmtDuration(values['p(95)'] || 0)}</td>`;
             html += '</tr>';
         }
     }
 
     html += '</tbody></table></div>';
-    html += '<p style="margin-top: 10px; color: #6c757d; font-size: 0.9em;"><i class="fas fa-info-circle"></i> All times are in milliseconds</p>';
 
     return html;
 }
@@ -1134,9 +1157,28 @@ function evaluateThreshold(rule, metric) {
 }
 
 /**
+ * Convert a metric key to a human-readable display name.
+ * Uses the provided map first, then falls back to smart auto-formatting.
+ *
+ * @param {string} key - The raw metric key (e.g. "plugin_flexion_time")
+ * @param {Object} [map] - Optional user-provided mapping of keys to display names
+ * @returns {string} Human-readable name
+ */
+function humanMetricName(key, map) {
+    if (map && map[key]) return map[key];
+    // Smart auto-format: strip common prefixes, replace underscores, title-case
+    return key
+        .replace(/^(browser_web_vital_|plugin_|wf_)/, '')
+        .replace(/_time$/, '')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/**
  * Build HTML for a single threshold item.
  */
-function buildThresholdItem(metricName, thresholdName, isPassed, metric, consoleErrorLog, timeoutEntries, errorEntries) {
+function buildThresholdItem(metricName, thresholdName, isPassed, metric, consoleErrorLog, timeoutEntries, errorEntries, metricNameMap) {
+    const displayName = humanMetricName(metricName, metricNameMap);
     // isPassed can be true, false, or null (no data)
     const color = isPassed === null ? '#6c757d' : isPassed ? '#28a745' : '#dc3545';
     const icon = isPassed === null ? 'question-circle' : isPassed ? 'check-circle' : 'times-circle';
@@ -1148,7 +1190,12 @@ function buildThresholdItem(metricName, thresholdName, isPassed, metric, console
     const entries = isConsoleErrors ? errorEntries : isConsoleTimeouts ? timeoutEntries : [];
     const hasEntries = entries.length > 0;
 
-    // Show actual metric value next to threshold rule
+    // Show actual metric value next to threshold rule, formatted for time metrics
+    const isTimeBased = metricName.includes('time') || metricName.includes('tbt') ||
+        metricName.includes('duration') || metricName.includes('dom_') ||
+        metricName.includes('lcp') || metricName.includes('fcp') ||
+        metricName.includes('fid') || metricName.includes('ttfb') ||
+        metricName.includes('inp');
     let actualValue = '';
     if (metric && metric.values) {
         const match = thresholdName.match(/^(\w+(?:\(\d+\))?)/);
@@ -1156,18 +1203,26 @@ function buildThresholdItem(metricName, thresholdName, isPassed, metric, console
             const stat = match[1];
             const val = metric.values[stat];
             if (val !== undefined && val !== null) {
-                actualValue = ` (actual: ${typeof val === 'number' ? val.toFixed(2) : val})`;
+                actualValue = isTimeBased
+                    ? ` (actual: ${fmtDuration(val)})`
+                    : ` (actual: ${typeof val === 'number' ? val.toFixed(2) : val})`;
             }
         }
+    }
+
+    // Format threshold rule: for time-based metrics, humanize the numeric threshold value
+    let displayRule = thresholdName;
+    if (isTimeBased) {
+        displayRule = thresholdName.replace(/([<>=!]+)(\d+(?:\.\d+)?)/g, (_, op, num) => `${op} ${fmtDuration(parseFloat(num))}`);
     }
 
     let html = `<div class="check-item" style="border-left: 4px solid ${color}; flex-direction: column; align-items: stretch;">`;
     html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
     html += `<div style="flex: 1;">`;
     html += `<div style="font-weight: 600; margin-bottom: 5px;">`;
-    html += `<i class="fas fa-${icon}" style="color: ${color};"></i> ${escapeHtml(metricName)}`;
+    html += `<i class="fas fa-${icon}" style="color: ${color};"></i> ${escapeHtml(displayName)}`;
     html += `</div>`;
-    html += `<div style="color: #6c757d; font-size: 0.9em; font-family: monospace;">${escapeHtml(thresholdName)}${actualValue}</div>`;
+    html += `<div style="color: #6c757d; font-size: 0.9em;">${escapeHtml(displayRule)}${actualValue}</div>`;
     html += `</div>`;
     html += `<div class="check-stats"><span class="badge ${badgeClass}"><i class="fas fa-${isPassed === null ? 'question' : isPassed ? 'check' : 'times'}"></i> ${label}</span></div>`;
     html += `</div>`;
@@ -1205,7 +1260,7 @@ function buildThresholdItem(metricName, thresholdName, isPassed, metric, console
  * Displays pass/fail status for all configured thresholds.
  * Uses k6's built-in evaluation when available, falls back to self-evaluation.
  */
-function generateThresholdsSection(data, consoleErrorLog, configuredThresholds) {
+function generateThresholdsSection(data, consoleErrorLog, configuredThresholds, metricNameMap) {
     let passedCount = 0;
     let failedCount = 0;
     let thresholdItems = '';
@@ -1231,7 +1286,7 @@ function generateThresholdsSection(data, consoleErrorLog, configuredThresholds) 
             for (const thresholdName in metric.thresholds) {
                 const isPassed = metric.thresholds[thresholdName].ok;
                 if (isPassed) passedCount++; else failedCount++;
-                thresholdItems += buildThresholdItem(metricName, thresholdName, isPassed, metric, consoleErrorLog, timeoutEntries, errorEntries);
+                thresholdItems += buildThresholdItem(metricName, thresholdName, isPassed, metric, consoleErrorLog, timeoutEntries, errorEntries, metricNameMap);
             }
         }
     } else if (configuredThresholds && Object.keys(configuredThresholds).length > 0) {
@@ -1245,7 +1300,7 @@ function generateThresholdsSection(data, consoleErrorLog, configuredThresholds) 
                 if (isPassed === true) passedCount++;
                 else if (isPassed === false) failedCount++;
                 // null = metric not present (no data)
-                thresholdItems += buildThresholdItem(metricName, rule, isPassed, metric, consoleErrorLog, timeoutEntries, errorEntries);
+                thresholdItems += buildThresholdItem(metricName, rule, isPassed, metric, consoleErrorLog, timeoutEntries, errorEntries, metricNameMap);
             }
         }
     }
@@ -1378,6 +1433,30 @@ function generateOverviewSection(stats) {
             </div>
         </div>
     `;
+}
+
+/**
+ * Format a duration in milliseconds to a human-readable string.
+ * - < 1000ms → "123ms"
+ * - < 60000ms → "12.34s"
+ * - < 3600000ms → "5m 23s"
+ * - >= 3600000ms → "1h 5m 23s"
+ *
+ * @param {number} ms - Duration in milliseconds
+ * @returns {string} Formatted duration string
+ */
+function fmtDuration(ms) {
+    if (ms === undefined || ms === null) return '—';
+    ms = Math.round(ms * 100) / 100; // 2dp precision
+    if (ms < 1000) return ms.toFixed(ms < 10 ? 2 : 0) + 'ms';
+    const totalSec = ms / 1000;
+    if (totalSec < 60) return totalSec.toFixed(2) + 's';
+    const minutes = Math.floor(totalSec / 60);
+    const seconds = Math.round(totalSec % 60);
+    if (minutes < 60) return `${minutes}m ${seconds}s`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours}h ${mins}m ${seconds}s`;
 }
 
 /**
